@@ -78,7 +78,7 @@ void test_placar(int uart_fd) {
 }
 
 int main(int argc, char *argv[]) {
-    const char *uart_device = "/dev/ttyUSB0";
+    const char *uart_device = "/dev/serial0";
     
     // Permite especificar dispositivo UART via argumento
     if (argc > 1) {

@@ -44,8 +44,8 @@ static int verify_modbus_response(const uint8_t *buffer, int len, uint8_t expect
         return -1;
     }
     
-    // Verifica CRC
-    uint16_t received_crc = buffer[len-2] | (buffer[len-1] << 8);
+    // Verifica CRC (little-endian)
+    uint16_t received_crc = (buffer[len-1] << 8) | buffer[len-2];
     uint16_t calculated_crc = crc16_modbus(buffer, len - 2);
     
     if (received_crc != calculated_crc) {
@@ -79,10 +79,10 @@ int lpr_trigger_capture(int uart_fd, uint8_t camera_addr, const char *matricula)
     // Prepara dados: Write Single Register (0x06) ou Write Multiple Registers (0x10)
     // Usando 0x10 para escrever no offset 1 (Trigger)
     uint8_t data[] = {
-        0x00, 0x01,  // Starting Address (offset 1)
-        0x00, 0x01,  // Quantity of Registers (1)
+        0x01, 0x00,  // Starting Address (offset 1) - little-endian
+        0x01, 0x00,  // Quantity of Registers (1) - little-endian
         0x02,        // Byte Count (2 bytes)
-        0x00, 0x01   // Register Value (1 = trigger)
+        0x01, 0x00   // Register Value (1 = trigger) - little-endian
     };
     
     int tx_len = build_modbus_message(tx_buffer, camera_addr, MODBUS_WRITE_MULTIPLE_REGS, 
@@ -110,8 +110,8 @@ int lpr_read_status(int uart_fd, uint8_t camera_addr, const char *matricula, uin
     
     // Read Holding Registers: offset 0, quantidade 1
     uint8_t data[] = {
-        0x00, 0x00,  // Starting Address (offset 0 = Status)
-        0x00, 0x01   // Quantity of Registers (1)
+        0x00, 0x00,  // Starting Address (offset 0 = Status) - little-endian  
+        0x01, 0x00   // Quantity of Registers (1) - little-endian
     };
     
     int tx_len = build_modbus_message(tx_buffer, camera_addr, MODBUS_READ_HOLDING_REGS, 
@@ -123,8 +123,8 @@ int lpr_read_status(int uart_fd, uint8_t camera_addr, const char *matricula, uin
     int rx_len = receive_uart(uart_fd, rx_buffer, sizeof(rx_buffer));
     if (rx_len > 0) {
         if (verify_modbus_response(rx_buffer, rx_len, camera_addr, MODBUS_READ_HOLDING_REGS) == 0) {
-            // Formato resposta: [addr][func][byte_count][data_hi][data_lo][crc_lo][crc_hi]
-            *status = rx_buffer[4]; // Low byte do registrador
+            // Formato resposta: [addr][func][byte_count][data_lo][data_hi][crc_lo][crc_hi]
+            *status = rx_buffer[3]; // Low byte do registrador (little-endian)
             return 0;
         }
     }
@@ -138,8 +138,8 @@ int lpr_read_data(int uart_fd, uint8_t camera_addr, const char *matricula, lpr_d
     
     // Read Holding Registers: offset 0, quantidade 8 (status + trigger + placa[4] + confiança + erro)
     uint8_t req_data[] = {
-        0x00, 0x00,  // Starting Address (offset 0)
-        0x00, 0x08   // Quantity of Registers (8)
+        0x00, 0x00,  // Starting Address (offset 0) - little-endian
+        0x08, 0x00   // Quantity of Registers (8) - little-endian
     };
     
     int tx_len = build_modbus_message(tx_buffer, camera_addr, MODBUS_READ_HOLDING_REGS, 
@@ -160,8 +160,8 @@ int lpr_read_data(int uart_fd, uint8_t camera_addr, const char *matricula, lpr_d
             int byte_count = rx_buffer[2];
             
             if (byte_count >= 16) { // 8 registradores * 2 bytes
-                // Status (offset 0)
-                data->status = rx_buffer[4]; // Low byte
+                // Status (offset 0) - little-endian
+                data->status = rx_buffer[3] | (rx_buffer[4] << 8); // Low byte first
                 
                 // Placa (offset 2-5): 4 registradores, 2 bytes cada = 8 chars
                 for (int i = 0; i < 8; i++) {
@@ -169,11 +169,11 @@ int lpr_read_data(int uart_fd, uint8_t camera_addr, const char *matricula, lpr_d
                 }
                 data->placa[8] = '\0';
                 
-                // Confiança (offset 6)
-                data->confianca = rx_buffer[15]; // Low byte
+                // Confiança (offset 6) - little-endian
+                data->confianca = rx_buffer[15] | (rx_buffer[16] << 8); // Low byte first
                 
-                // Erro (offset 7)
-                data->erro = rx_buffer[17]; // Low byte
+                // Erro (offset 7) - little-endian
+                data->erro = rx_buffer[17] | (rx_buffer[18] << 8); // Low byte first
                 
                 return 0;
             }
@@ -189,10 +189,10 @@ int lpr_reset_trigger(int uart_fd, uint8_t camera_addr, const char *matricula) {
     
     // Write Multiple Registers: escrever 0 no offset 1 (Trigger)
     uint8_t data[] = {
-        0x00, 0x01,  // Starting Address (offset 1)
-        0x00, 0x01,  // Quantity of Registers (1)
+        0x01, 0x00,  // Starting Address (offset 1) - little-endian
+        0x01, 0x00,  // Quantity of Registers (1) - little-endian
         0x02,        // Byte Count (2 bytes)
-        0x00, 0x00   // Register Value (0 = reset)
+        0x00, 0x00   // Register Value (0 = reset) - little-endian
     };
     
     int tx_len = build_modbus_message(tx_buffer, camera_addr, MODBUS_WRITE_MULTIPLE_REGS, 
@@ -214,41 +214,41 @@ int placar_update(int uart_fd, const char *matricula, const placar_data_t *data)
     uint8_t rx_buffer[32];
     
     // Write Multiple Registers: escrever 13 registradores (offset 0-12)
-    uint8_t req_data[30];
-    req_data[0] = 0x00; // Starting Address Hi
-    req_data[1] = 0x00; // Starting Address Lo (offset 0)
-    req_data[2] = 0x00; // Quantity of Registers Hi
-    req_data[3] = 0x0D; // Quantity of Registers Lo (13)
+    uint8_t req_data[31]; // 5 bytes cabeçalho + 26 bytes dados
+    req_data[0] = 0x00; // Starting Address Lo
+    req_data[1] = 0x00; // Starting Address Hi (offset 0) - little-endian
+    req_data[2] = 0x0D; // Quantity of Registers Lo
+    req_data[3] = 0x00; // Quantity of Registers Hi (13) - little-endian
     req_data[4] = 0x1A; // Byte Count (26 bytes = 13 regs * 2)
     
-    // Preenche os dados dos registradores (big-endian)
+    // Preenche os dados dos registradores (little-endian)
     int idx = 5;
-    req_data[idx++] = (data->vagas_terreo_pne >> 8) & 0xFF;
     req_data[idx++] = data->vagas_terreo_pne & 0xFF;
-    req_data[idx++] = (data->vagas_terreo_idoso >> 8) & 0xFF;
+    req_data[idx++] = (data->vagas_terreo_pne >> 8) & 0xFF;
     req_data[idx++] = data->vagas_terreo_idoso & 0xFF;
-    req_data[idx++] = (data->vagas_terreo_comuns >> 8) & 0xFF;
+    req_data[idx++] = (data->vagas_terreo_idoso >> 8) & 0xFF;
     req_data[idx++] = data->vagas_terreo_comuns & 0xFF;
-    req_data[idx++] = (data->vagas_1andar_pne >> 8) & 0xFF;
+    req_data[idx++] = (data->vagas_terreo_comuns >> 8) & 0xFF;
     req_data[idx++] = data->vagas_1andar_pne & 0xFF;
-    req_data[idx++] = (data->vagas_1andar_idoso >> 8) & 0xFF;
+    req_data[idx++] = (data->vagas_1andar_pne >> 8) & 0xFF;
     req_data[idx++] = data->vagas_1andar_idoso & 0xFF;
-    req_data[idx++] = (data->vagas_1andar_comuns >> 8) & 0xFF;
+    req_data[idx++] = (data->vagas_1andar_idoso >> 8) & 0xFF;
     req_data[idx++] = data->vagas_1andar_comuns & 0xFF;
-    req_data[idx++] = (data->vagas_2andar_pne >> 8) & 0xFF;
+    req_data[idx++] = (data->vagas_1andar_comuns >> 8) & 0xFF;
     req_data[idx++] = data->vagas_2andar_pne & 0xFF;
-    req_data[idx++] = (data->vagas_2andar_idoso >> 8) & 0xFF;
+    req_data[idx++] = (data->vagas_2andar_pne >> 8) & 0xFF;
     req_data[idx++] = data->vagas_2andar_idoso & 0xFF;
-    req_data[idx++] = (data->vagas_2andar_comuns >> 8) & 0xFF;
+    req_data[idx++] = (data->vagas_2andar_idoso >> 8) & 0xFF;
     req_data[idx++] = data->vagas_2andar_comuns & 0xFF;
-    req_data[idx++] = (data->carros_terreo >> 8) & 0xFF;
+    req_data[idx++] = (data->vagas_2andar_comuns >> 8) & 0xFF;
     req_data[idx++] = data->carros_terreo & 0xFF;
-    req_data[idx++] = (data->carros_1andar >> 8) & 0xFF;
+    req_data[idx++] = (data->carros_terreo >> 8) & 0xFF;
     req_data[idx++] = data->carros_1andar & 0xFF;
-    req_data[idx++] = (data->carros_2andar >> 8) & 0xFF;
+    req_data[idx++] = (data->carros_1andar >> 8) & 0xFF;
     req_data[idx++] = data->carros_2andar & 0xFF;
-    req_data[idx++] = (data->flags >> 8) & 0xFF;
+    req_data[idx++] = (data->carros_2andar >> 8) & 0xFF;
     req_data[idx++] = data->flags & 0xFF;
+    req_data[idx++] = (data->flags >> 8) & 0xFF;
     
     int tx_len = build_modbus_message(tx_buffer, PLACAR_VAGAS_ADDR, MODBUS_WRITE_MULTIPLE_REGS, 
                                       req_data, sizeof(req_data), matricula);
@@ -257,7 +257,7 @@ int placar_update(int uart_fd, const char *matricula, const placar_data_t *data)
     print_buffer(tx_buffer, tx_len);
     
     send_uart(uart_fd, tx_buffer, tx_len);
-    usleep(50000); // 50ms delay
+    usleep(50000);
     
     int rx_len = receive_uart(uart_fd, rx_buffer, sizeof(rx_buffer));
     if (rx_len > 0) {

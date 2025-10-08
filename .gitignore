@@ -1,0 +1,3 @@
+# Arquivo de teste local que não deve ir para o repositório
+test_modbus_offline.c
+README1.md
